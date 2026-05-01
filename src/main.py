@@ -11,8 +11,8 @@ if __name__ == "__main__":
     app = build_graph()
 
     state = {
-        "pdf_path": "data/SeeWeeS Specialty distribution.pdf",
-        "csv_path": "data/Incoming_shipment_02_08.csv",
+        "pdf_path": "data/SeeWeeS Specialty Dispatch Playbook.pdf",
+        "csv_path": "data/Incoming_shipment_03_06.csv",
     }
 
     final = app.invoke(state)
