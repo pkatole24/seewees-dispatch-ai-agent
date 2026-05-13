@@ -1,5 +1,7 @@
 # secrets
 .env
+.env.*
+!.env.example
 
 # python
 .venv/
@@ -16,5 +18,8 @@ chroma_db/
 
 # logs
 *.log
-.env
-data-for-enhancement/
+.pytest_cache/
+pytest-cache-files-*/
+
+# keep enhancement datasets, but not the local explainer note
+data-for-enhancement/README.md

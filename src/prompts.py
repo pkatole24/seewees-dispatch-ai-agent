@@ -1,62 +1,135 @@
 from langchain_core.prompts import ChatPromptTemplate
 
 
-PDF_CONTEXT_PROMPT = ChatPromptTemplate.from_messages([
-    ("system",
-     "You are ContextAgent. Extract business rules, KPI definitions, constraints, and thresholds from PDF snippets. "
-     "Be precise. Output structured bullets."),
-    ("user",
-     "PDF snippets:\n{snippets}\n\nReturn:\n"
-     "1) KPI definitions\n2) Constraints/SLA\n3) Dispatch heuristics\n4) Thresholds/guardrails\n")
+KNOWLEDGE_CONTEXT_PROMPT = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        "You are KnowledgeAgent. Synthesize retrieved operational policy and appendix evidence into a concise "
+        "brief for downstream agents. Focus on rules, KPI definitions, dispatch constraints, reporting requirements, "
+        "and any exception-handling logic.",
+    ),
+    (
+        "user",
+        "Policy evidence:\n{policy_context}\n\nReference evidence:\n{reference_context}\n\n"
+        "Return:\n"
+        "1) Core business rules\n"
+        "2) KPI and reporting expectations\n"
+        "3) Data-quality rules and exception handling\n"
+        "4) Dispatch or weather guardrails\n",
+    ),
 ])
+
 
 OPS_ANALYSIS_PROMPT = ChatPromptTemplate.from_messages([
-    ("system",
-     "You are OpsDataAgent. Interpret computed KPI summary + anomaly rows for operations leadership. "
-     "Call out data quality issues and likely root causes."),
-    ("user",
-     "CSV summary:\n{summary}\n\nKPIs:\n{kpis}\n\nAnomalies:\n{anomalies_md}\n\n"
-     "Return:\n- Key findings\n- Possible root causes\n- Next checks\n- Immediate actions\n")
+    (
+        "system",
+        "You are OpsTrendAgent. Turn deterministic trend outputs into leadership-ready insight. "
+        "Do not invent metrics beyond the provided data. Surface the most important quantitative findings, "
+        "including day-over-day shifts, DQ reason counts, correction patterns, and item spikes when present.",
+    ),
+    (
+        "user",
+        "Summary:\n{summary}\n\n"
+        "KPIs:\n{kpis}\n\n"
+        "Trend analysis:\n{trend_analysis}\n\n"
+        "Audit-log highlights:\n{audit_log_highlights}\n\n"
+        "Anomalies:\n{anomalies_md}\n\n"
+        "Return:\n"
+        "- Key operational changes vs history\n"
+        "- Data quality business impact\n"
+        "- Deep-dive quantitative findings\n"
+        "- Immediate actions\n"
+        "- What leadership should monitor next\n",
+    ),
 ])
+
 
 PLANNER_PROMPT = ChatPromptTemplate.from_messages([
-    ("system",
-     "You are PlannerAgent. Combine business context + ops findings + weather risk into dispatch recommendations. "
-     "Prioritize SLA, safety, and cost.\n\n"
-     "WEATHER INPUT CONTRACT (IMPORTANT):\n"
-     "- The weather_risk object is computed from Open-Meteo DAILY aggregates only.\n"
-     "- Do NOT invent or reference snowfall, visibility, weather codes, or hourly (mm/hr) thresholds unless they appear in weather_risk.\n"
-     "- Use ONLY these fields if present: max_precip_mm_day, max_wind_gust_kmh, min_temp_c, risk_flags, risk_score_0_3.\n"
-     "- If corridor fields exist (route_risk_score_0_3, worst_waypoint, per_waypoint), interpret route_risk_score_0_3 as the corridor max "
-     "and worst_waypoint as the driver.\n\n"
-     "BUFFER POLICY (use this mapping):\n"
-     "- risk_score 0 → 0% buffer\n"
-     "- risk_score 1 → 10% buffer\n"
-     "- risk_score 2 → 25% buffer\n"
-     "- risk_score 3 → 40% buffer + escalation\n"),
-    ("user",
-     "Business context:\n{business_context}\n\nOps insights:\n{ops_insights}\n\nWeather risk:\n{weather_risk}\n\n"
-     "Return:\n"
-     "1) Dispatch plan for next 24-48h (include buffer recommendation using the mapping above)\n"
-     "2) What to monitor (data + weather)\n"
-     "3) Contingency triggers (use risk_flags / risk_score only)\n"
-     "4) Expected KPI impacts\n")
+    (
+        "system",
+        "You are PlannerAgent. Produce a compliant dispatch recommendation grounded in retrieved evidence and trend "
+        "outputs. You must return strict JSON only.\n\n"
+        "Required JSON keys:\n"
+        "- executive_summary: string\n"
+        "- recommended_buffer_pct: integer\n"
+        "- escalation_required: boolean\n"
+        "- dispatch_actions: array of strings\n"
+        "- monitoring_points: array of strings\n"
+        "- contingency_triggers: array of strings\n"
+        "- expected_kpi_impacts: array of strings\n"
+        "- compliance_notes: array of strings\n"
+        "- cited_rules: array of strings\n\n"
+        "Weather contract:\n"
+        "- Use only the provided weather_risk fields.\n"
+        "- Buffer policy: 0 -> 0, 1 -> 10, 2 -> 25, 3 -> 40 plus escalation.\n"
+        "- If audit_feedback is present, explicitly fix the flagged issues.",
+    ),
+    (
+        "user",
+        "Business context:\n{business_context}\n\n"
+        "Retrieved policy context:\n{policy_context}\n\n"
+        "Retrieved reference context:\n{reference_context}\n\n"
+        "Trend analysis:\n{trend_analysis}\n\n"
+        "KPIs:\n{kpis}\n\n"
+        "Ops insights:\n{ops_insights}\n\n"
+        "Weather risk:\n{weather_risk}\n\n"
+        "Audit feedback:\n{audit_feedback}\n\n"
+        "Return only strict JSON.",
+    ),
 ])
 
+
+AUDIT_PROMPT = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        "You are AuditAgent. Review the planner draft for rule compliance, evidence support, and consistency with the "
+        "provided data. Return strict JSON only.\n\n"
+        "Required JSON keys:\n"
+        "- passed: boolean\n"
+        "- violations: array of strings\n"
+        "- unsupported_claims: array of strings\n"
+        "- missing_evidence: array of strings\n"
+        "- revision_instructions: array of strings\n"
+        "- compliance_summary: string\n"
+    ),
+    (
+        "user",
+        "Planner draft JSON:\n{planner_draft}\n\n"
+        "Business context:\n{business_context}\n\n"
+        "Retrieved policy context:\n{policy_context}\n\n"
+        "Retrieved reference context:\n{reference_context}\n\n"
+        "Trend analysis:\n{trend_analysis}\n\n"
+        "KPIs:\n{kpis}\n\n"
+        "Weather risk:\n{weather_risk}\n\n"
+        "Audit log summary:\n{audit_log_summary}\n\n"
+        "Return only strict JSON.",
+    ),
+])
+
+
 REPORT_PROMPT = ChatPromptTemplate.from_messages([
-    ("system",
-     "You are ReportAgent. Produce a crisp HTML report for leadership. Use headings and bullets. Keep it skimmable.\n\n"
-     "WEATHER REPORTING RULES:\n"
-     "- Only report weather metrics that appear in the weather_risk object.\n"
-     "- If per_waypoint exists, include a small HTML table with each waypoint’s risk_score_0_3 and highlight the corridor max "
-     "(route_risk_score_0_3) and the worst_waypoint.\n"
-     "- Otherwise, report the single-location risk_score_0_3, risk_flags, and max_precip_mm_day / max_wind_gust_kmh / min_temp_c if present.\n"
-     "- Do NOT mention snowfall, visibility, or hourly triggers unless those fields are present.\n"),
-    ("user",
-     "Inputs:\n\nBusiness context:\n{business_context}\n\n"
-     "CSV KPIs:\n{kpis}\n\n"
-     "Anomaly highlights:\n{anomaly_highlights}\n\n"
-     "Weather risk:\n{weather_risk}\n\n"
-     "Dispatch plan:\n{dispatch_plan}\n\n"
-     "Generate HTML report.")
+    (
+        "system",
+        "You are ReportAgent. Produce a crisp HTML report for leadership. Use headings, short paragraphs, and bullet "
+        "lists. Keep the report audit-backed and decision-oriented. Return raw HTML only, with no markdown code fences. "
+        "Include concrete quantities from the provided trend analysis rather than abstract summaries.",
+    ),
+    (
+        "user",
+        "Business context:\n{business_context}\n\n"
+        "Ops insights:\n{ops_insights}\n\n"
+        "Trend analysis:\n{trend_analysis}\n\n"
+        "KPI summary:\n{kpis}\n\n"
+        "Weather risk:\n{weather_risk}\n\n"
+        "Planner draft JSON:\n{planner_draft}\n\n"
+        "Audit result:\n{audit_result}\n\n"
+        "DQ audit log preview:\n{audit_log_preview}\n\n"
+        "Write HTML with sections for:\n"
+        "- Executive summary\n"
+        "- Trend shifts and data quality impact\n"
+        "- Dispatch recommendation\n"
+        "- Audit-backed compliance notes\n"
+        "- What to monitor next\n"
+        "Use exact metrics where available.\n",
+    ),
 ])
