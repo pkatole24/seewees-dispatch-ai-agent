@@ -20,6 +20,7 @@ chroma_db/
 *.log
 .pytest_cache/
 pytest-cache-files-*/
+presentation_workspaces/
 
 # keep enhancement datasets, but not the local explainer note
 data-for-enhancement/README.md

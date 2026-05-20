@@ -1,0 +1,92 @@
+﻿MSBA Ops Deep-Dive Analytics Appendix
+=====================================
+
+This appendix contains deterministic tables used by the agents. It is separated from the executive email body to keep the report decision-focused.
+
+Daily Valid Shipment Trend
+--------------------------
+shipment_date | planning_day | valid_units
+--------------+--------------+------------
+2026-02-22    | History      | 8
+2026-02-23    | History      | 8
+2026-02-24    | History      | 7
+2026-02-25    | History      | 8
+2026-02-26    | History      | 8
+2026-02-27    | History      | 8
+2026-02-28    | History      | 8
+2026-03-01    | History      | 7
+2026-03-02    | History      | 8
+2026-03-03    | History      | 8
+2026-03-04    | History      | 8
+2026-03-05    | History      | 8
+2026-03-06    | Day0         | 15
+2026-03-07    | Day1         | 15
+
+Planning Window Corridor by Day Breakdown
+-----------------------------------------
+corridor_id   | planning_day | valid_units
+--------------+--------------+------------
+C1_I95_NJ_BOS | Day0         | 8
+C1_I95_NJ_BOS | Day1         | 8
+C2_NJ_PHL     | Day0         | 7
+C2_NJ_PHL     | Day1         | 7
+
+Top Item Spikes vs Historical Baseline
+--------------------------------------
+canonical_item_name                         | planning_window_units | historical_avg_daily_units | spike_ratio
+--------------------------------------------+-----------------------+----------------------------+------------
+Pembrolizumab                               | 4                     | 1.8571428571428572         | 2.15
+Insulin Lispro                              | 4                     | 1.8                        | 2.22
+Epinephrine Auto-Injector                   | 4                     | 1.75                       | 2.29
+Albuterol Inhaler                           | 4                     | 1.6666666666666667         | 2.4
+Morphine Sulfate                            | 3                     | 1.5                        | 2.0
+Remdesivir 100mg                            | 3                     | 1.4444444444444444         | 2.08
+Heparin Sodium                              | 3                     | 1.2857142857142858         | 2.33
+Remdesivir 200mg                            | 2                     | 1.0                        | 2.0
+Experimental Oncology Drug (Clinical Trial) | 2                     | 0.0                        | nan
+Insulin Aspart                              | 1                     | 1.0                        | 1.0
+
+Resolution / Correction Breakdown
+---------------------------------
+resolution_code | units
+----------------+------
+alias_match     | 26
+exact_match     | 95
+legacy_id_map   | 3
+
+Exclusion Breakdown by Reason
+-----------------------------
+reason_code                     | units
+--------------------------------+------
+excluded_missing_unique_item_id | 5
+
+Excluded Rows by Day and Reason
+-------------------------------
+shipment_date | planning_day | reason_code                     | excluded_units
+--------------+--------------+---------------------------------+---------------
+2026-02-24    | History      | excluded_missing_unique_item_id | 1
+2026-03-01    | History      | excluded_missing_unique_item_id | 1
+2026-03-06    | Day0         | excluded_missing_unique_item_id | 3
+
+Sample Corrected Rows
+---------------------
+item_id | item_name                | canonical_item_id | canonical_item_name       | resolution_code | planning_day | corridor_id
+--------+--------------------------+-------------------+---------------------------+-----------------+--------------+------------
+10021   | Remdesivir 100 mg        | RMD-100           | Remdesivir 100mg          | alias_match     | History      | C2_NJ_PHL
+10035   | Pembrolizumab (Keytruda) | PMB-KEY           | Pembrolizumab             | alias_match     | History      | C2_NJ_PHL
+10040   | EpiPen Auto Injector     | EPI-AI            | Epinephrine Auto-Injector | alias_match     | History      | C2_NJ_PHL
+10050   | Heparin Na               | HEP-SOD           | Heparin Sodium            | alias_match     | History      | C2_NJ_PHL
+10060   | Morphine Sulphate        | MOR-SUL           | Morphine Sulfate          | alias_match     | History      | C2_NJ_PHL
+10070   | Albuterol Inhaler 90mcg  | ALB-INH           | Albuterol Inhaler         | alias_match     | History      | C2_NJ_PHL
+10021   | Remdesivir 100 mg        | RMD-100           | Remdesivir 100mg          | alias_match     | History      | C2_NJ_PHL
+10040   | EpiPen Auto Injector     | EPI-AI            | Epinephrine Auto-Injector | alias_match     | History      | C2_NJ_PHL
+
+Sample Excluded / Unresolved Rows
+---------------------------------
+item_id | item_name        | unique_item_id | reason_code                     | issue_codes | planning_day | corridor_id
+--------+------------------+----------------+---------------------------------+-------------+--------------+--------------
+10022   | Insulin Lispro   |                | excluded_missing_unique_item_id | ['DQ-01']   | History      | C2_NJ_PHL
+10021   | Remdesivir 100mg |                | excluded_missing_unique_item_id | ['DQ-01']   | History      | C1_I95_NJ_BOS
+10021   | Remdesivir 100mg |                | excluded_missing_unique_item_id | ['DQ-01']   | Day0         | C1_I95_NJ_BOS
+20021   | Remdesivir 200mg |                | excluded_missing_unique_item_id | ['DQ-01']   | Day0         | C1_I95_NJ_BOS
+10022   | Insulin Lispro   |                | excluded_missing_unique_item_id | ['DQ-01']   | Day0         | C2_NJ_PHL

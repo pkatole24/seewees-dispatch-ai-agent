@@ -9,6 +9,12 @@ from tools.knowledge_tools import load_reference_facts
 
 
 SAMPLE_PLAYBOOK = """
+### 3.1 Corridors
+| corridor_id | corridor_name | origin_dc | destination_region | default_sla_tier | notes |
+|---|---|---|---|---|---|
+| C1 | Test Tier 1 | Newark_NJ_DC | Boston_MA | Tier 1 | Test corridor |
+| C2 | Test Tier 2 | Newark_NJ_DC | Philadelphia_PA | Tier 2 | Test corridor |
+
 ## 11. Data Quality Rules (Anomaly Definitions)
 | Rule ID | Description | Action |
 |---|---|---|
@@ -117,3 +123,10 @@ def test_analyze_csv_reconciles_aliases_and_legacy_ids(tmp_path: Path):
     assert "excluded_unresolved" in excluded_reasons
     assert result.trend_analysis["deep_dive_tables"]["item_spikes"]
     assert result.trend_analysis["deep_dive_tables"]["correction_breakdown"]
+
+    corridor_kpis = {row["corridor_id"]: row for row in result.trend_analysis["corridor_kpis"]}
+    assert corridor_kpis["C1"]["default_sla_tier"] == "Tier 1"
+    assert corridor_kpis["C1"]["planning_window_valid_units"] == 2
+    assert corridor_kpis["C1"]["planning_window_excluded_units"] == 1
+    assert result.trend_analysis["planning_window"]["sla_tier_mix"] == {"Tier 1": 2}
+    assert any("Tier 1 corridor" in flag for flag in result.trend_analysis["sla_risk_flags"])

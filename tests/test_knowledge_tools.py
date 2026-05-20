@@ -8,6 +8,12 @@ from tools.knowledge_tools import evaluate_retrieval_results, load_reference_fac
 
 
 SAMPLE_PLAYBOOK = """
+### 3.1 Corridors
+| corridor_id | corridor_name | origin_dc | destination_region | default_sla_tier | notes |
+|---|---|---|---|---|---|
+| C1_I95_NJ_BOS | NJ to Boston | Newark_NJ_DC | Boston_MA | Tier 1 | Existing corridor |
+| C2_NJ_PHL | NJ to Philadelphia | Newark_NJ_DC | Philadelphia_PA | Tier 2 | Added corridor |
+
 ## 11. Data Quality Rules (Anomaly Definitions)
 | Rule ID | Description | Action |
 |---|---|---|
@@ -57,6 +63,7 @@ def test_load_reference_facts_parses_alias_and_legacy_tables(tmp_path: Path):
     assert reference_facts["alias_by_name"]["heparin na"]["canonical_item_id"] == "HEP-SOD"
     assert reference_facts["legacy_by_item_id"]["1070"]["canonical_item_id"] == "ALB-INH"
     assert reference_facts["buffer_policy_by_score"]["3"]["Travel Time Adjustment"] == "+40% buffer + escalation"
+    assert reference_facts["corridor_by_id"]["C1_I95_NJ_BOS"]["default_sla_tier"] == "Tier 1"
 
 
 def test_evaluate_retrieval_results_scores_hits():

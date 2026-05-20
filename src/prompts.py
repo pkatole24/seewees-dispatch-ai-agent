@@ -57,12 +57,21 @@ PLANNER_PROMPT = ChatPromptTemplate.from_messages([
         "- monitoring_points: array of strings\n"
         "- contingency_triggers: array of strings\n"
         "- expected_kpi_impacts: array of strings\n"
+        "- sla_risk_flags: array of strings\n"
         "- compliance_notes: array of strings\n"
         "- cited_rules: array of strings\n\n"
         "Weather contract:\n"
         "- Use only the provided weather_risk fields.\n"
         "- Buffer policy: 0 -> 0, 1 -> 10, 2 -> 25, 3 -> 40 plus escalation.\n"
-        "- If audit_feedback is present, explicitly fix the flagged issues.",
+        "- If audit_feedback is present, explicitly fix the flagged issues.\n"
+        "- Keep the output limited to the implemented scope: weather buffers, SLA risk, data-quality reconciliation, corridor KPIs, escalation, and monitoring.\n"
+        "- Do not include vehicle-capacity, packing, staffing, driver, fleet, or resource-planning claims in any JSON field.\n"
+        "- SLA tiering is corridor-level only. Do not assign stricter SLA tiers, special SLA rules, or special escalation rules by medicine, item, product class, or cold-chain status unless the retrieved policy explicitly says so.\n"
+        "- Ground escalation only in weather risk score, corridor SLA tier, DQ rule codes, excluded-unit counts, and deterministic SLA risk flags.\n"
+        "- Describe weather evidence factually. Avoid causal language such as saying a route score is 'driven by' one condition unless that causal rule is explicit in the provided data.\n"
+        "- Do not make forward-looking claims such as a KPI pattern 'will continue'; describe only the current evidence and monitoring triggers.\n"
+        "- Do not describe what a report will include; write only the recommendation itself.\n"
+        "- Avoid legalistic or absolute compliance language. Use evidence-backed operational wording instead.",
     ),
     (
         "user",
@@ -70,6 +79,8 @@ PLANNER_PROMPT = ChatPromptTemplate.from_messages([
         "Retrieved policy context:\n{policy_context}\n\n"
         "Retrieved reference context:\n{reference_context}\n\n"
         "Trend analysis:\n{trend_analysis}\n\n"
+        "Corridor KPIs:\n{corridor_kpis}\n\n"
+        "Deterministic SLA risk flags:\n{sla_risk_flags}\n\n"
         "KPIs:\n{kpis}\n\n"
         "Ops insights:\n{ops_insights}\n\n"
         "Weather risk:\n{weather_risk}\n\n"
@@ -99,6 +110,8 @@ AUDIT_PROMPT = ChatPromptTemplate.from_messages([
         "Retrieved policy context:\n{policy_context}\n\n"
         "Retrieved reference context:\n{reference_context}\n\n"
         "Trend analysis:\n{trend_analysis}\n\n"
+        "Corridor KPIs:\n{corridor_kpis}\n\n"
+        "Deterministic SLA risk flags:\n{sla_risk_flags}\n\n"
         "KPIs:\n{kpis}\n\n"
         "Weather risk:\n{weather_risk}\n\n"
         "Audit log summary:\n{audit_log_summary}\n\n"
@@ -110,26 +123,41 @@ AUDIT_PROMPT = ChatPromptTemplate.from_messages([
 REPORT_PROMPT = ChatPromptTemplate.from_messages([
     (
         "system",
-        "You are ReportAgent. Produce a crisp HTML report for leadership. Use headings, short paragraphs, and bullet "
-        "lists. Keep the report audit-backed and decision-oriented. Return raw HTML only, with no markdown code fences. "
-        "Include concrete quantities from the provided trend analysis rather than abstract summaries.",
+        "You are ReportAgent. Produce a crisp HTML decision memo for senior operations leadership. Use headings, short "
+        "paragraphs, and short bullet lists. Keep the report rule-grounded, decision-oriented, and based on exact metrics. "
+        "Return raw HTML only, with no markdown code fences.",
     ),
     (
         "user",
         "Business context:\n{business_context}\n\n"
         "Ops insights:\n{ops_insights}\n\n"
         "Trend analysis:\n{trend_analysis}\n\n"
+        "Corridor KPIs:\n{corridor_kpis}\n\n"
+        "Deterministic SLA risk flags:\n{sla_risk_flags}\n\n"
         "KPI summary:\n{kpis}\n\n"
         "Weather risk:\n{weather_risk}\n\n"
         "Planner draft JSON:\n{planner_draft}\n\n"
         "Audit result:\n{audit_result}\n\n"
         "DQ audit log preview:\n{audit_log_preview}\n\n"
-        "Write HTML with sections for:\n"
-        "- Executive summary\n"
-        "- Trend shifts and data quality impact\n"
-        "- Dispatch recommendation\n"
-        "- Audit-backed compliance notes\n"
-        "- What to monitor next\n"
-        "Use exact metrics where available.\n",
+        "Write HTML using this exact section order:\n"
+        "Title: Start with <h1>SeeWeeS Medical Logistics Dispatch Decision Memo</h1>\n"
+        "1. Executive Decision Summary: 2 short paragraphs stating the decision, business impact, and whether human escalation is needed\n"
+        "2. Decision Actions: 3-4 bullets that a senior operations leader can act on immediately\n"
+        "3. SLA Watch Items: concise bullets grounded in deterministic SLA risk flags, translated into business risk language\n"
+        "4. Weather Route Snapshot: compact per-waypoint table using only weather_risk.per_waypoint fields: waypoint, city, risk score, precipitation, wind gust, min temperature, and true risk flags\n"
+        "5. Corridor Performance Snapshot: compact table using corridor_kpis fields; emphasize Tier, valid units, excluded units, and excluded rate\n"
+        "6. Rule-Grounded Rationale: 3 short bullets tying the recommendation to DQ rules, buffer policy, reconciliation counts, and retrieved policy evidence\n"
+        "7. Expected KPI Impact: 3 grounded bullets only, such as protecting Tier 1 SLA margin, keeping DQ-01 rows out of planning, and improving traceability through canonical item mapping\n"
+        "8. Monitoring Triggers: concise, executive-facing bullets for what should cause re-review\n"
+        "Use exact metrics where available. Do not make claims about operational-planning areas that are outside the current deterministic calculations. "
+        "SLA tiering is corridor-level only. Do not imply that products, medicines, product classes, or cold-chain status receive stricter SLA tiers or special escalation rules unless that is explicit in the retrieved policy. "
+        "Do not say a risk is 'driven by' a condition unless the provided data explicitly defines that causal relationship; use factual wording such as 'weather flags include'. "
+        "Do not make future-looking claims such as a KPI pattern 'will continue'; say what the current data show and what should be monitored. "
+        "Do not use meta phrases such as 'final report will include', 'this report will include', 'ensuring full compliance', or 'as mandated by policy'. "
+        "Write the report as a finished executive decision memo, not a description of the report itself. "
+        "Do not mention the internal audit loop or AuditAgent unless audit_result.passed is false. "
+        "Prefer plain business language over analyst narration: say what changed, why it matters, and what leadership should do next. "
+        "Keep detailed item mixes, reconciliation samples, excluded-row samples, and long tables out of the email body; those belong in the attached appendix. "
+        "Do not include an appendix section in the email body.\n",
     ),
 ])

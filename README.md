@@ -8,6 +8,8 @@ The implementation in this repo primarily targets:
 
 The repo also includes early multi-corridor groundwork related to `Idea 5`, but full resource-allocation logic is not part of the current reporting flow.
 
+Planner and report context is filtered to keep the implementation scope concise and keep audit behavior aligned with the chosen Ideas 1 and 3 scope.
+
 ## What This System Does
 
 The current system:
@@ -17,8 +19,9 @@ The current system:
 - computes period-over-period shipment trends, corridor mix, correction/exclusion breakdowns, and item-level spike analysis
 - generates a planner recommendation
 - runs an audit loop that can reject the planner output and force a retry before reporting
-- generates a leadership-style HTML report
-- can optionally email the report through SMTP
+- generates a leadership-style HTML report with a compact weather route snapshot and corridor KPI comparison
+- creates a separate deep-dive text appendix for detailed reconciliation, exclusion, correction, and trend tables
+- can optionally email the report and appendix through SMTP
 - records a lightweight RAG evaluation with `Recall@k` and grounded-answer accuracy
 
 ## Challenge Alignment
@@ -43,20 +46,35 @@ Implemented:
 - corridor-level and item-level trend summaries
 - deep-dive appendix tables for corrected samples, unresolved samples, exclusions, and item spikes
 
-## Current Agent Flow
+## LangGraph Flow
+
+```mermaid
+flowchart TD
+    A["Knowledge Agent<br/>RAG over PDFs and enhancement playbook"] --> B["Ops / Trend Agent<br/>DQ reconciliation, corridor KPIs, trend analysis"]
+    B --> C["Weather Node<br/>Waypoint forecasts and buffer risk"]
+    C --> D["Planner Agent<br/>Structured dispatch recommendation JSON"]
+    D --> E["Audit Agent<br/>LLM review plus deterministic rule checks"]
+    E -->|"passes"| F["Report Agent<br/>Executive HTML report"]
+    E -->|"fails and retries remain"| D
+    E -->|"fails after retry budget"| F
+    F --> G["Email Step<br/>Optional SMTP delivery with text appendix"]
+    G --> H["END"]
+```
 
 1. `Knowledge Agent`
    Retrieves policy and reference evidence from the indexed documents.
 2. `Ops / Trend Agent`
    Turns deterministic CSV reconciliation and analytics outputs into business insight.
-3. `Planner Agent`
+3. `Weather Node`
+   Retrieves waypoint-level weather risk and applies the playbook buffer mapping.
+4. `Planner Agent`
    Produces a structured dispatch recommendation in JSON.
-4. `Audit Agent`
+5. `Audit Agent`
    Verifies rule compliance, evidence support, and required buffer logic.
-5. `Report Agent`
-   Produces the final HTML leadership report.
-6. `Email Step` (optional)
-   Sends the report via SMTP if email environment variables are configured.
+6. `Report Agent`
+   Produces the final HTML leadership report and a separate deep-dive appendix.
+7. `Email Step` (optional)
+   Sends the report and appendix via SMTP if email environment variables are configured.
 
 ## Key Files
 
@@ -80,6 +98,8 @@ Implemented:
   Optional SMTP email delivery.
 - `tests/`
   Deterministic tests for reconciliation, retrieval evaluation, and graph helper behavior.
+- `docs/technical_business_report.md`
+  Separate technical and business documentation for the challenge deliverable.
 
 ## Data Inputs
 
@@ -102,19 +122,32 @@ The main run produces:
 - RAG evaluation metrics
 - planner audit result
 - HTML dispatch report
+- text appendix for deep-dive analytics tables
 
 The generated report includes:
-- executive summary
-- trend shifts and data-quality impact
-- dispatch recommendation
-- audit-backed compliance notes
-- monitoring recommendations
-- deep-dive analytics appendix tables
+- executive decision summary
+- immediate decision actions
+- SLA watch items
+- waypoint-level weather route snapshot
+- corridor performance snapshot
+- rule-grounded rationale
+- expected KPI impact
+- monitoring triggers
+
+The separate deep-dive appendix includes:
+- daily valid shipment trend
+- corridor-by-day breakdown
+- item spike analysis
+- correction and exclusion breakdowns
+- sample corrected rows
+- sample excluded or unresolved rows
 
 ## Repository Structure
 
 - `data/` original PDFs
 - `data-for-enhancement/` challenge datasets and enhancement playbook
+- `docs/` technical and business documentation
+- `outputs/sample_report/` redacted sample report PDF and generated appendix text
 - `src/` application code
 - `tests/` unit tests
 - `chroma_db/` local vector store cache (not committed)
@@ -177,6 +210,8 @@ Email settings are optional. If `REPORT_EMAIL_TO` is blank, the workflow will sk
 python src/main.py
 ```
 
+The terminal prints node-by-node progress while the graph runs, including planner attempts and audit status.
+
 This command runs the end-to-end graph on the current default challenge dataset:
 - shipment file: `data-for-enhancement/Incoming_shipments_14d_multi_corridor.csv`
 - reference markdown: `data-for-enhancement/SeeWeeS Specialty Dispatch Playbook.md`
@@ -194,8 +229,10 @@ pytest -q
 The tests cover:
 - appendix parsing for aliases / legacy IDs
 - shipment reconciliation behavior
+- corridor KPI and SLA tier assignment
 - audit-loop helper logic
 - report helper formatting
+- weather snapshot rendering
 - RAG evaluation scoring helpers
 
 ## Technical Notes

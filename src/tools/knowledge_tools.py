@@ -118,6 +118,7 @@ def load_reference_facts(markdown_path: str) -> dict[str, Any]:
             by_heading[heading] = table
 
     canonical_items = by_heading.get("A.1 Canonical Item Master (Authoritative)", [])
+    corridors = by_heading.get("3.1 Corridors", [])
     alias_matches = by_heading.get("A.2 Name Alias / Variant Table (Accepted)", [])
     legacy_id_map = by_heading.get("A.3 Legacy / Deprecated / Invalid Identifier Mapping", [])
     dq_rules = by_heading.get("11. Data Quality Rules (Anomaly Definitions)", [])
@@ -154,6 +155,8 @@ def load_reference_facts(markdown_path: str) -> dict[str, Any]:
         "canonical_by_id": canonical_by_id,
         "exact_name_map": exact_name_map,
         "canonical_by_canonical_id": _rows_to_mapping(canonical_items, "canonical_item_id"),
+        "corridors": corridors,
+        "corridor_by_id": _rows_to_mapping(corridors, "corridor_id"),
         "alias_matches": alias_matches,
         "alias_by_name": alias_by_name,
         "legacy_id_map": legacy_id_map,

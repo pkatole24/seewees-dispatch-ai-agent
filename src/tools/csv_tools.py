@@ -218,7 +218,69 @@ def _build_anomalies(valid_shipments: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def _build_trend_analysis(reconciled: pd.DataFrame) -> tuple[dict[str, Any], dict[str, Any]]:
+def _corridor_tier_map(reference_facts: Dict[str, Any] | None) -> dict[str, str]:
+    corridor_by_id = (reference_facts or {}).get("corridor_by_id", {})
+    return {
+        str(corridor_id): str(row.get("default_sla_tier", "Unknown") or "Unknown")
+        for corridor_id, row in corridor_by_id.items()
+    }
+
+
+def _build_corridor_kpis(
+    reconciled: pd.DataFrame,
+    reference_facts: Dict[str, Any] | None,
+) -> tuple[list[dict[str, Any]], dict[str, int], list[str]]:
+    if "corridor_id" not in reconciled.columns:
+        return [], {}, []
+
+    tier_by_corridor = _corridor_tier_map(reference_facts)
+    planning_rows = reconciled[_planning_mask(reconciled)].copy()
+    if planning_rows.empty:
+        return [], {}, []
+
+    corridor_ids = sorted(str(value) for value in planning_rows["corridor_id"].dropna().unique())
+    corridor_kpis: list[dict[str, Any]] = []
+    tier_mix: dict[str, int] = {}
+    sla_risk_flags: list[str] = []
+
+    for corridor_id in corridor_ids:
+        corridor_rows = planning_rows[planning_rows["corridor_id"].astype(str) == corridor_id]
+        valid_rows = corridor_rows[corridor_rows["inclusion_status"] == "valid"]
+        excluded_rows = corridor_rows[corridor_rows["inclusion_status"] != "valid"]
+        valid_units = int(len(valid_rows))
+        excluded_units = int(len(excluded_rows))
+        total_units = valid_units + excluded_units
+        excluded_rate = round(excluded_units / max(total_units, 1), 3)
+        sla_tier = tier_by_corridor.get(corridor_id, "Unknown")
+        tier_mix[sla_tier] = tier_mix.get(sla_tier, 0) + valid_units
+
+        corridor_kpis.append(
+            {
+                "corridor_id": corridor_id,
+                "default_sla_tier": sla_tier,
+                "planning_window_valid_units": valid_units,
+                "planning_window_excluded_units": excluded_units,
+                "planning_window_total_units": total_units,
+                "planning_window_excluded_rate": excluded_rate,
+            }
+        )
+
+        if sla_tier == "Tier 1" and valid_units:
+            sla_risk_flags.append(
+                f"{corridor_id} is a Tier 1 corridor with {valid_units} valid planning-window unit(s); monitor 6-hour SLA exposure."
+            )
+        if sla_tier == "Tier 1" and excluded_units:
+            sla_risk_flags.append(
+                f"{corridor_id} has {excluded_units} excluded planning-window unit(s), creating traceability risk for Tier 1 dispatch planning."
+            )
+
+    return corridor_kpis, tier_mix, sla_risk_flags
+
+
+def _build_trend_analysis(
+    reconciled: pd.DataFrame,
+    reference_facts: Dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     valid_shipments = reconciled[reconciled["inclusion_status"] == "valid"].copy()
     excluded_shipments = reconciled[reconciled["inclusion_status"] != "valid"].copy()
 
@@ -349,6 +411,7 @@ def _build_trend_analysis(reconciled: pd.DataFrame) -> tuple[dict[str, Any], dic
             for key, value in valid_shipments["resolution_code"].value_counts().to_dict().items()
         },
     }
+    corridor_kpis, sla_tier_mix, sla_risk_flags = _build_corridor_kpis(reconciled, reference_facts)
 
     trend_analysis = {
         "period_over_period": {
@@ -362,7 +425,10 @@ def _build_trend_analysis(reconciled: pd.DataFrame) -> tuple[dict[str, Any], dic
             "valid_units": planning_total,
             "excluded_units": int(len(excluded_shipments[_planning_mask(excluded_shipments)])),
             "corridor_mix": corridor_mix,
+            "sla_tier_mix": sla_tier_mix,
         },
+        "corridor_kpis": corridor_kpis,
+        "sla_risk_flags": sla_risk_flags,
         "dq_summary": dq_summary,
         "item_mix": {
             "planning_window_top_items": _series_to_json_ready(item_mix_planning),
@@ -426,7 +492,7 @@ def analyze_csv(csv_path: str, reference_facts: Dict[str, Any] | None = None) ->
 
     valid_shipments = reconciled[reconciled["inclusion_status"] == "valid"].copy()
     excluded_shipments = reconciled[reconciled["inclusion_status"] != "valid"].copy()
-    trend_analysis, kpis = _build_trend_analysis(reconciled)
+    trend_analysis, kpis = _build_trend_analysis(reconciled, reference_facts)
     anomalies = _build_anomalies(valid_shipments)
     numeric_cols = valid_shipments.select_dtypes(include=[np.number]).columns.tolist()
 

@@ -44,6 +44,8 @@ class AppState(TypedDict, total=False):
     audit_log_preview: str
     anomalies_md: str
     trend_analysis: Dict[str, Any]
+    corridor_kpis: List[Dict[str, Any]]
+    sla_risk_flags: List[str]
     ops_insights: str
 
     weather_risk: Dict[str, Any]
@@ -53,6 +55,7 @@ class AppState(TypedDict, total=False):
     audit_result: Dict[str, Any]
     audit_feedback: Dict[str, Any]
     report_html: str
+    appendix_text: str
 
 
 def _existing_paths(paths: List[str]) -> List[str]:
@@ -99,6 +102,78 @@ def _strip_code_fences(text: str) -> str:
     return stripped.strip()
 
 
+OUT_OF_SCOPE_CONTEXT_PATTERNS = (
+    r"## 8\. Truck Capacity & Packing Model.*?(?=\n## |\Z)",
+    r"## 13\. Resource Constraints and Allocation Policy.*?(?=\n## |\Z)",
+    r"- Recommended resource allocation \(drivers/trucks/temp-controlled\).*?(?=\n- |\n## |\Z)",
+)
+
+
+FORBIDDEN_PLANNER_OUTPUT_TERMS = (
+    "truck capacity",
+    "packing constraint",
+    "resource allocation",
+    "driver allocation",
+    "truck allocation",
+    "driver/truck",
+    "final dispatch report will include",
+    "final report will include",
+    "this report will include",
+    "ensuring full compliance",
+    "as mandated by policy",
+)
+
+
+PLANNER_OUTPUT_REPLACEMENTS = (
+    (r"\btruck[- ]capacity compliance\b", "current-scope policy alignment"),
+    (r"\btruck[- ]capacity\b", "current-scope logistics"),
+    (r"\bstricter SLA tiering\b", "corridor-level SLA monitoring"),
+    (r"\bstricter SLA tiers\b", "corridor-level SLA monitoring"),
+    (r"\bspecial SLA rules\b", "corridor-level SLA rules"),
+    (r"\bspecial escalation rules\b", "rule-based escalation triggers"),
+    (r"\bmedicine[- ]type[- ]specific escalation\b", "rule-code monitoring"),
+    (r"\bdriven by\b", "associated with"),
+    (r"\bwill continue to\b", "currently"),
+    (r"\bwill continue\b", "currently continues"),
+    (r"\bpacking constraints\b", "item handling requirements"),
+    (r"\bpacking constraint\b", "item handling requirement"),
+    (r"\bpackaging attributes\b", "item handling attributes"),
+    (r"\bproduct-class constraints\b", "product handling requirements"),
+    (r"\bresource allocation\b", "current-scope dispatch monitoring"),
+    (r"\bdriver allocation\b", "current-scope dispatch monitoring"),
+    (r"\btruck allocation\b", "current-scope dispatch monitoring"),
+    (r"\bdriver/truck sufficiency\b", "current-scope dispatch readiness"),
+    (r"\bdriver/truck\b", "dispatch"),
+    (r"\bcapacity use\b", "planning exposure"),
+    (r"\bfinal dispatch report will include\b", "recommendation includes"),
+    (r"\bfinal report will include\b", "recommendation includes"),
+    (r"\bthis report will include\b", "recommendation includes"),
+    (r"\bensuring full compliance\b", "supporting policy alignment"),
+    (r"\bas mandated by policy\b", "per retrieved playbook rules"),
+)
+
+
+def _filter_implemented_scope_context(text: str) -> str:
+    scoped = text
+    for pattern in OUT_OF_SCOPE_CONTEXT_PATTERNS:
+        scoped = re.sub(pattern, "", scoped, flags=re.DOTALL)
+    return re.sub(r"\n{3,}", "\n\n", scoped).strip()
+
+
+def _sanitize_planner_output(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _sanitize_planner_output(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_planner_output(item) for item in value]
+    if not isinstance(value, str):
+        return value
+
+    sanitized = value
+    for pattern, replacement in PLANNER_OUTPUT_REPLACEMENTS:
+        sanitized = re.sub(pattern, replacement, sanitized, flags=re.IGNORECASE)
+    return sanitized
+
+
 def _html_table(rows: List[Dict[str, Any]], columns: List[str] | None = None) -> str:
     if not rows:
         return "<p>(none)</p>"
@@ -120,6 +195,58 @@ def _html_table(rows: List[Dict[str, Any]], columns: List[str] | None = None) ->
         f"<thead><tr>{header}</tr></thead>"
         f"<tbody>{''.join(body_rows)}</tbody></table>"
     )
+
+
+def _true_risk_flags(flags: Dict[str, Any] | None) -> str:
+    if not flags:
+        return "none"
+    true_flags = [key for key, value in flags.items() if value is True and key != "weather_data_unavailable"]
+    return ", ".join(true_flags) if true_flags else "none"
+
+
+def _render_weather_snapshot_html(weather_risk: Dict[str, Any]) -> str:
+    per_waypoint = weather_risk.get("per_waypoint", [])
+    if not per_waypoint:
+        return ""
+
+    worst_waypoint = weather_risk.get("worst_waypoint", {}).get("waypoint")
+    rows: list[dict[str, Any]] = []
+    for waypoint in per_waypoint:
+        waypoint_id = waypoint.get("waypoint", "")
+        if waypoint_id == worst_waypoint:
+            waypoint_id = f"{waypoint_id} (worst)"
+        rows.append(
+            {
+                "Waypoint": waypoint_id,
+                "City": waypoint.get("city", ""),
+                "Risk Score": waypoint.get("risk_score_0_3", ""),
+                "Precip mm": waypoint.get("max_precip_mm_day", ""),
+                "Wind km/h": waypoint.get("max_wind_gust_kmh", ""),
+                "Min Temp C": waypoint.get("min_temp_c", ""),
+                "Risk Flags": _true_risk_flags(waypoint.get("risk_flags")),
+            }
+        )
+
+    return (
+        "<h2>4. Weather Route Snapshot</h2>"
+        "<p>Per-waypoint weather evidence used for the corridor buffer decision. "
+        "Scores map to the playbook buffer tiers: 0 = 0%, 1 = 10%, 2 = 25%, 3 = 40% plus escalation.</p>"
+        + _html_table(rows, ["Waypoint", "City", "Risk Score", "Precip mm", "Wind km/h", "Min Temp C", "Risk Flags"])
+    )
+
+
+def _ensure_weather_snapshot_section(report_html: str, weather_risk: Dict[str, Any]) -> str:
+    if "Weather Route Snapshot" in report_html:
+        return report_html
+
+    weather_html = _render_weather_snapshot_html(weather_risk)
+    if not weather_html:
+        return report_html
+
+    corridor_heading = re.search(r"<h2>\s*\d+\.\s*Corridor Performance Snapshot\s*</h2>", report_html, re.IGNORECASE)
+    if corridor_heading:
+        return report_html[: corridor_heading.start()] + weather_html + report_html[corridor_heading.start() :]
+    return f"{report_html}\n{weather_html}"
 
 
 def _render_deep_dive_html(state: AppState) -> str:
@@ -189,6 +316,62 @@ def _render_deep_dive_html(state: AppState) -> str:
     return "".join(sections)
 
 
+def _text_table(rows: List[Dict[str, Any]], columns: List[str] | None = None) -> str:
+    if not rows:
+        return "(none)"
+
+    if columns is None:
+        columns = list(rows[0].keys())
+
+    safe_rows = [
+        {column: "" if row.get(column) is None else str(row.get(column)) for column in columns}
+        for row in rows
+    ]
+    widths = {
+        column: max(len(column), *(len(row[column]) for row in safe_rows))
+        for column in columns
+    }
+    header = " | ".join(column.ljust(widths[column]) for column in columns)
+    divider = "-+-".join("-" * widths[column] for column in columns)
+    body = [
+        " | ".join(row[column].ljust(widths[column]) for column in columns)
+        for row in safe_rows
+    ]
+    return "\n".join([header, divider, *body])
+
+
+def _render_deep_dive_text(state: AppState) -> str:
+    trend = state.get("trend_analysis", {})
+    deep = trend.get("deep_dive_tables", {})
+    if not deep:
+        return ""
+
+    sections: list[str] = [
+        "MSBA Ops Deep-Dive Analytics Appendix",
+        "=" * 37,
+        "",
+        "This appendix contains deterministic tables used by the agents. It is separated from the executive email body to keep the report decision-focused.",
+    ]
+
+    table_specs = [
+        ("Daily Valid Shipment Trend", "daily_valid_units", ["shipment_date", "planning_day", "valid_units"]),
+        ("Planning Window Corridor by Day Breakdown", "corridor_day_breakdown", ["corridor_id", "planning_day", "valid_units"]),
+        ("Top Item Spikes vs Historical Baseline", "item_spikes", ["canonical_item_name", "planning_window_units", "historical_avg_daily_units", "spike_ratio"]),
+        ("Resolution / Correction Breakdown", "correction_breakdown", ["resolution_code", "units"]),
+        ("Exclusion Breakdown by Reason", "exclusion_breakdown", ["reason_code", "units"]),
+        ("Excluded Rows by Day and Reason", "daily_excluded_units", ["shipment_date", "planning_day", "reason_code", "excluded_units"]),
+        ("Sample Corrected Rows", "corrected_samples", ["item_id", "item_name", "canonical_item_id", "canonical_item_name", "resolution_code", "planning_day", "corridor_id"]),
+        ("Sample Excluded / Unresolved Rows", "unresolved_samples", ["item_id", "item_name", "unique_item_id", "reason_code", "issue_codes", "planning_day", "corridor_id"]),
+    ]
+
+    for title, key, columns in table_specs:
+        rows = deep.get(key, [])
+        if rows:
+            sections.extend(["", title, "-" * len(title), _text_table(rows, columns)])
+
+    return "\n".join(sections)
+
+
 def node_knowledge(state: AppState) -> AppState:
     knowledge_sources = default_knowledge_sources(state)
     rag = KnowledgeRag(persist_dir="chroma_db")
@@ -254,6 +437,8 @@ def node_trend_analysis(state: AppState) -> AppState:
         "audit_log_preview": audit_log_preview,
         "anomalies_md": anomalies_md,
         "trend_analysis": result.trend_analysis,
+        "corridor_kpis": result.trend_analysis.get("corridor_kpis", []),
+        "sla_risk_flags": result.trend_analysis.get("sla_risk_flags", []),
         "ops_insights": ops_insights,
     }
 
@@ -280,6 +465,57 @@ def _parse_waypoints_from_text(text: str) -> List[Dict[str, Any]]:
     return waypoints
 
 
+def _expected_buffer_pct(risk_score: int) -> int:
+    return {0: 0, 1: 10, 2: 25, 3: 40}.get(risk_score, 0)
+
+
+def _build_sla_risk_flags(state: AppState, weather_risk: Dict[str, Any]) -> List[str]:
+    flags = list(state.get("sla_risk_flags", []))
+    risk_score = int(
+        weather_risk.get("risk_score_0_3", weather_risk.get("route_risk_score_0_3", 0)) or 0
+    )
+    buffer_pct = _expected_buffer_pct(risk_score)
+
+    if risk_score > 0:
+        for corridor in state.get("trend_analysis", {}).get("corridor_kpis", []):
+            if corridor.get("default_sla_tier") == "Tier 1" and corridor.get("planning_window_valid_units", 0):
+                flags.append(
+                    f"Weather risk score {risk_score} requires a {buffer_pct}% travel buffer for Tier 1 corridor {corridor.get('corridor_id')}."
+                )
+
+    if risk_score == 3:
+        flags.append("Weather risk score 3 requires escalation before final dispatch approval.")
+
+    return list(dict.fromkeys(flags))
+
+
+def _weather_unavailable_risk(error: Exception | str) -> Dict[str, Any]:
+    return {
+        "max_precip_mm_day": 0.0,
+        "max_wind_gust_kmh": 0.0,
+        "min_temp_c": None,
+        "risk_flags": {
+            "heavy_rain_risk": False,
+            "high_wind_risk": False,
+            "freezing_risk": False,
+            "weather_data_unavailable": True,
+        },
+        "risk_score_0_3": 0,
+        "weather_data_status": "unavailable",
+        "weather_error": str(error),
+    }
+
+
+def _get_weather_risk_for_location(lat: str, lon: str, tz: str) -> Dict[str, Any]:
+    try:
+        forecast = get_weather_forecast(lat, lon, tz)
+        risk = derive_dispatch_weather_risk(forecast)
+        risk["weather_data_status"] = "available"
+        return risk
+    except Exception as exc:
+        return _weather_unavailable_risk(exc)
+
+
 def node_weather(state: AppState) -> AppState:
     tz = os.getenv("WEATHER_TZ", "America/New_York")
     pdf_path = state.get("pdf_path", "data/SeeWeeS Specialty Dispatch Playbook.pdf")
@@ -304,8 +540,7 @@ def node_weather(state: AppState) -> AppState:
             per_waypoint: List[Dict[str, Any]] = []
             max_score = -1
             for waypoint in waypoints:
-                forecast = get_weather_forecast(str(waypoint["lat"]), str(waypoint["lon"]), tz)
-                risk = derive_dispatch_weather_risk(forecast)
+                risk = _get_weather_risk_for_location(str(waypoint["lat"]), str(waypoint["lon"]), tz)
                 enriched = {"waypoint": waypoint["id"], "city": waypoint["city"], **risk}
                 per_waypoint.append(enriched)
                 if enriched.get("risk_score_0_3", -1) > max_score:
@@ -313,37 +548,44 @@ def node_weather(state: AppState) -> AppState:
                     max_score = enriched["risk_score_0_3"]
 
             if worst:
+                weather_risk = {
+                    "route_risk_score_0_3": max_score,
+                    "worst_waypoint": worst,
+                    "per_waypoint": per_waypoint,
+                    "max_precip_mm_day": worst.get("max_precip_mm_day"),
+                    "max_wind_gust_kmh": worst.get("max_wind_gust_kmh"),
+                    "min_temp_c": worst.get("min_temp_c"),
+                    "risk_flags": worst.get("risk_flags"),
+                    "risk_score_0_3": worst.get("risk_score_0_3"),
+                }
                 return {
-                    "weather_risk": {
-                        "route_risk_score_0_3": max_score,
-                        "worst_waypoint": worst,
-                        "per_waypoint": per_waypoint,
-                        "max_precip_mm_day": worst.get("max_precip_mm_day"),
-                        "max_wind_gust_kmh": worst.get("max_wind_gust_kmh"),
-                        "min_temp_c": worst.get("min_temp_c"),
-                        "risk_flags": worst.get("risk_flags"),
-                        "risk_score_0_3": worst.get("risk_score_0_3"),
-                    }
+                    "weather_risk": weather_risk,
+                    "sla_risk_flags": _build_sla_risk_flags(state, weather_risk),
                 }
 
     lat = os.getenv("WEATHER_LAT", "40.7282")
     lon = os.getenv("WEATHER_LON", "-74.0776")
-    forecast = get_weather_forecast(lat, lon, tz)
-    return {"weather_risk": derive_dispatch_weather_risk(forecast)}
+    weather_risk = _get_weather_risk_for_location(lat, lon, tz)
+    return {
+        "weather_risk": weather_risk,
+        "sla_risk_flags": _build_sla_risk_flags(state, weather_risk),
+    }
 
 
 def node_planner(state: AppState) -> AppState:
     attempts = int(state.get("planner_attempts", 0)) + 1
-    planner_draft = run_planner_agent(
+    planner_draft = _sanitize_planner_output(run_planner_agent(
         business_context=state.get("business_context", ""),
-        policy_context=state.get("retrieved_policy_context", ""),
-        reference_context=state.get("retrieved_reference_context", ""),
+        policy_context=_filter_implemented_scope_context(state.get("retrieved_policy_context", "")),
+        reference_context=_filter_implemented_scope_context(state.get("retrieved_reference_context", "")),
         trend_analysis=state.get("trend_analysis", {}),
+        corridor_kpis=state.get("corridor_kpis", []),
+        sla_risk_flags=state.get("sla_risk_flags", []),
         kpis=state.get("csv_kpis", {}),
         ops_insights=state.get("ops_insights", ""),
         weather_risk=state.get("weather_risk", {}),
         audit_feedback=state.get("audit_feedback", {}),
-    )
+    ))
     return {
         "planner_draft": planner_draft,
         "planner_attempts": attempts,
@@ -353,7 +595,7 @@ def node_planner(state: AppState) -> AppState:
 def apply_deterministic_audit_checks(state: AppState, audit_result: Dict[str, Any]) -> Dict[str, Any]:
     weather_risk = state.get("weather_risk", {})
     risk_score = weather_risk.get("risk_score_0_3", weather_risk.get("route_risk_score_0_3", 0))
-    expected_buffer = {0: 0, 1: 10, 2: 25, 3: 40}.get(int(risk_score or 0), 0)
+    expected_buffer = _expected_buffer_pct(int(risk_score or 0))
     planner_draft = state.get("planner_draft", {})
 
     violations = list(audit_result.get("violations", []))
@@ -376,6 +618,21 @@ def apply_deterministic_audit_checks(state: AppState, audit_result: Dict[str, An
         missing_evidence.append("Planner draft does not cite supporting rules from retrieved policy context.")
         revision_instructions.append("Add cited_rules that reference the governing playbook rules used in the plan.")
 
+    if state.get("sla_risk_flags") and not planner_draft.get("sla_risk_flags"):
+        missing_evidence.append("Planner draft does not include deterministic SLA risk flags.")
+        revision_instructions.append("Include the provided sla_risk_flags in the planner draft.")
+
+    planner_text = str(planner_draft).lower()
+    forbidden_hits = [term for term in FORBIDDEN_PLANNER_OUTPUT_TERMS if term in planner_text]
+    if forbidden_hits:
+        violations.append(
+            "Planner draft includes terms reserved for internal reasoning or meta-reporting language: "
+            + ", ".join(sorted(set(forbidden_hits)))
+        )
+        revision_instructions.append(
+            "Remove truck-capacity/resource-allocation language and report-meta phrasing from all planner output fields."
+        )
+
     audit_result["violations"] = violations
     audit_result["missing_evidence"] = missing_evidence
     audit_result["revision_instructions"] = revision_instructions
@@ -387,9 +644,11 @@ def node_audit(state: AppState) -> AppState:
     base_audit_result = run_audit_agent(
         planner_draft=state.get("planner_draft", {}),
         business_context=state.get("business_context", ""),
-        policy_context=state.get("retrieved_policy_context", ""),
-        reference_context=state.get("retrieved_reference_context", ""),
+        policy_context=_filter_implemented_scope_context(state.get("retrieved_policy_context", "")),
+        reference_context=_filter_implemented_scope_context(state.get("retrieved_reference_context", "")),
         trend_analysis=state.get("trend_analysis", {}),
+        corridor_kpis=state.get("corridor_kpis", []),
+        sla_risk_flags=state.get("sla_risk_flags", []),
         kpis=state.get("csv_kpis", {}),
         weather_risk=state.get("weather_risk", {}),
         audit_log_summary=state.get("trend_analysis", {}).get("dq_summary", {}),
@@ -425,6 +684,8 @@ def node_report(state: AppState) -> AppState:
         business_context=state.get("business_context", ""),
         ops_insights=state.get("ops_insights", ""),
         trend_analysis=state.get("trend_analysis", {}),
+        corridor_kpis=state.get("corridor_kpis", []),
+        sla_risk_flags=state.get("sla_risk_flags", []),
         kpis=state.get("csv_kpis", {}),
         weather_risk=state.get("weather_risk", {}),
         planner_draft=state.get("planner_draft", {}),
@@ -432,20 +693,20 @@ def node_report(state: AppState) -> AppState:
         audit_log_preview=state.get("audit_log_preview", "(none)"),
     )
     report_html = _strip_code_fences(report_html)
-    deep_dive_html = _render_deep_dive_html(state)
-    if deep_dive_html:
-        report_html = f"{report_html}\n{deep_dive_html}"
+    report_html = _ensure_weather_snapshot_section(report_html, state.get("weather_risk", {}))
+    appendix_text = _render_deep_dive_text(state)
 
     if not audit_result.get("passed"):
         unresolved = audit_result.get("violations", []) + audit_result.get("missing_evidence", [])
         warning_html = (
-            "<h2>Audit Status</h2>"
-            "<p><strong>Audit did not fully pass.</strong> Presenting a controlled failure state for human review.</p>"
+            "<h2>Review Status</h2>"
+            "<p><strong>Human review required before dispatch approval.</strong> "
+            "The automated checks found items that need confirmation.</p>"
             f"<ul>{''.join(f'<li>{item}</li>' for item in unresolved[:8])}</ul>"
         )
-        report_html = warning_html + report_html
+        report_html = f"{report_html}\n{warning_html}"
 
-    return {"report_html": report_html}
+    return {"report_html": report_html, "appendix_text": appendix_text}
 
 
 def node_email(state: AppState) -> AppState:
@@ -454,7 +715,21 @@ def node_email(state: AppState) -> AppState:
         return {}
 
     subject = "MSBA Ops Multi-Agent Dispatch Report"
-    send_email_smtp(subject=subject, html_body=state["report_html"], to_email=to_email)
+    attachments = []
+    if state.get("appendix_text"):
+        attachments.append(
+            {
+                "filename": "msba_ops_deep_dive_appendix.txt",
+                "mime_type": "text/plain",
+                "content": state["appendix_text"],
+            }
+        )
+    send_email_smtp(
+        subject=subject,
+        html_body=state["report_html"],
+        to_email=to_email,
+        attachments=attachments,
+    )
     return {}
 
 
