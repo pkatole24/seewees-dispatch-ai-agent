@@ -98,8 +98,6 @@ flowchart TD
   Optional SMTP email delivery.
 - `tests/`
   Deterministic tests for reconciliation, retrieval evaluation, and graph helper behavior.
-- `docs/technical_business_report.md`
-  Separate technical and business documentation for the challenge deliverable.
 
 ## Data Inputs
 
@@ -146,7 +144,6 @@ The separate deep-dive appendix includes:
 
 - `data/` original PDFs
 - `data-for-enhancement/` challenge datasets and enhancement playbook
-- `docs/` technical and business documentation
 - `outputs/sample_report/` redacted sample report PDF and generated appendix text
 - `src/` application code
 - `tests/` unit tests
